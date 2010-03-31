@@ -1,0 +1,184 @@
+#!/bin/bash
+## {{{ LICENSE
+# Copyright (c) 2010 Martin Schuhfuss
+# 
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is furnished
+# to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+## }}}
+
+# {{{ GLOBALS AND SETTINGS
+me="$(basename $0)"
+
+# }}}
+
+## {{{ error(), log(), debug()
+function error() {
+	if [ $useColors -eq 1 ] && [ -t 1 ] ; then
+		printf "\033[01;37;41m$me: $@\033[00m\n" >&2
+	else
+		printf "$me: $@\n" >&2
+	fi
+}
+
+function log() {
+	if [ $useColors -eq 1 ] && [ -t 1 ] ; then
+		printf "\033[01;37m> $@\033[00m\n"
+	else
+		printf "> $@\n"
+	fi
+}
+
+function debug() {
+	if [ $verbose -eq 0 ] ; then return ; fi
+
+	if [ $useColors -eq 1 ] && [ -t 1 ] ; then
+		printf ">>> $@\n"
+	else
+		printf ">>> $@\n"
+	fi
+}
+
+function colorize() {
+	local str=$1
+	
+	local transform_exp='s%\{([^\}]+)\}(.*)\{\/\1\}%\${color_\1}\2\${color_default}%gx'
+
+	local color_br='\033[01;31m'
+	local color_default='\033[00m'
+	
+	# can't believe this worked...
+	printf "$( \
+			eval "printf $( \
+					echo "$str" \
+							| perl -pe "$transform_exp" \
+				)" \
+	)"
+}
+
+#colorize "foo{br}bar{/br}foo"
+#exit
+## }}}
+
+# {{{ print_help()
+function print_help() {
+	cat <<- __EOF__
+		USAGE:
+		  $me [OPTIONS] [project]
+		
+		EXAMPLES:
+		  1. $me -b spotcms-3.3 spotcms
+		     copy trunk into new branch spotcms-3.3
+		  2. $me -t spotcms-3.0.4 -f spotcms-3.0 spotcms
+		     copy spotcms-3.0 branch to tag spotcms-3.0.4
+		
+		OPTIONS:
+		  -h -? --help         print this help
+		  -t --tag TAG         create the given tag
+		  -b --branch BRANCH   create the given branch
+		  -f --from BRANCH     create from the given branch
+		  -r --repository REPOSITORY  use REPOSITORY as repository-root
+		      (default is 'https://svn.spot-media.net/subversion')
+
+		If no source branch is specified with --from, the trunk of the
+		project will be copied.
+	__EOF__
+	return 0
+}
+# }}}
+
+# {{{ PARSE COMMANDLINE-OPTIONS AND ARGUMENTS
+[[ $# -eq 0 ]] && print_help && exit 0
+
+shortopts="t:,b:,r:,f:,h,?,v"
+longopts="tag:,branch:,repository-url:,from-branch:,help,verbose"
+
+TMP=$(getopt -n $me -l $longopts -o $shortopts -- "$@" )
+if [ $? != 0 ] ; then print_help && exit 1 ; fi
+eval set -- "$TMP"
+
+while [ $# -gt 0 ] ; do
+	case $1 in
+		--tag|-t) tag="$2" ; shift 2 ;;
+		--branch|-b) branch="$2" ; shift 2 ;;
+		--repository-url|-r) repository=$2 ; shift 2 ;;
+		--from-branch|-f) from_branch=$2 ; shift 2 ;;
+		--help|-h|-\?) print_help && exit 0;;
+		# end of options
+		--)
+			shift 1
+			project=$1
+		;;
+		*) shift 1 ;;
+	esac
+done
+# }}}
+
+function get_repository_root()
+{
+	infoOutput="$(svn info)"
+	if [ $? -ne 0 ] ; then
+		return
+	fi
+	
+	echo -n "$infoOutput" | grep 'Repository Root:' | cut -c18-
+}
+
+
+repository_root=$(get_repository_root)
+if [ -z "$project" -a -z "$repository_root" ] ; then
+	error "no project specified and no working copy found."
+	exit 1
+fi
+
+if [ -z "$tag" -a -z "$branch" ] || [ "$tag" -a "$branch" ] ; then
+	error "either a branch- or a tag-name has to be specified."
+	exit 1
+fi
+
+if [ -z "$repository_root" -a "$project" ] ; then
+	repository_root="$repository/$project"
+fi
+
+if [ -z "$repository_root" ] ; then
+	error "unable to find the repository-root"
+	exit 1
+fi
+
+src_url=""
+dest_url=""
+log_message=""
+
+if [ -z "$from_branch" ] ; then
+	src_url="$repository_root/trunk"
+else
+	src_url="$repository_root/branches/$from_branch"
+fi
+
+if [ "$branch" ] ; then
+	dest_url="$repository_root/branches/$branch"
+	log_message="created new branch $branch"
+elif [ "$tag" ] ; then
+	dest_url="$repository_root/tags/$tag"
+	log_message="created new tag $tag"
+fi
+
+echo ">>> copying $src_url to $dest_url"
+echo "svn copy -m \"$log_message\" $src_url $dest_url"
+svn copy -m "$log_message" $src_url $dest_url
+
+# vim: ts=2 sw=2 filetype=sh
